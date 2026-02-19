@@ -44,4 +44,30 @@ class LoanSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Loan
-        fields = ['id', 'book', 'book_id', 'member', 'member_id', 'loan_date', 'return_date', 'is_returned']
+        fields = ['id', 'book', 'book_id', 'member', 'member_id', 'loan_date', 'return_date', 'is_returned', 'due_date']
+        read_only_fields = ['due_date']
+
+class ExtendDueDateSerializer(serializers.Serializer):
+    additional_days = serializers.IntegerField()
+
+    def validate_additional_days(self, value):
+        loan = self.instance
+        
+        if loan.is_overdue:
+            raise serializers.ValidationError("Cannot extend an overdue loan")
+        if value <= 0:
+            raise serializers.ValidationError("Must be a positive Integer")
+        return value
+        
+    def update(self, instance, validated_data):
+        return instance.extend_due_date(validated_data['additional_days'])
+
+class TopActiveMemberSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    active_loans = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Member
+        fields = ['id', 'email', 'username', 'active_loans']
+        

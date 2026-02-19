@@ -1,5 +1,8 @@
+from datetime import timedelta
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
+from django.db import transaction
 
 class Author(models.Model):
     first_name = models.CharField(max_length=100)
@@ -35,12 +38,31 @@ class Member(models.Model):
     def __str__(self):
         return self.user.username
 
+def default_loan_due_date():
+    return timezone.now().date() + timedelta(days=14)
+
 class Loan(models.Model):
     book = models.ForeignKey(Book, related_name='loans', on_delete=models.CASCADE)
     member = models.ForeignKey(Member, related_name='loans', on_delete=models.CASCADE)
     loan_date = models.DateField(auto_now_add=True)
     return_date = models.DateField(null=True, blank=True)
     is_returned = models.BooleanField(default=False)
+    due_date = models.DateField(default=default_loan_due_date)
 
     def __str__(self):
         return f"{self.book.title} loaned to {self.member.user.username}"
+
+    @property
+    def is_overdue(self):
+        return self.due_date < timezone.now().date()
+
+    @transaction.atomic
+    def extend_due_date(self, additional_days):
+        loan = Loan.objects.select_for_update().get(pk=self.pk)
+        if loan.is_overdue:
+            raise ValueError("Cannot extend overdue loan")
+        if additional_days <= 0:
+            raise ValueError("Must be a positive Integer")
+        loan.due_date += timedelta(days=additional_days)
+        loan.save()
+        return loan

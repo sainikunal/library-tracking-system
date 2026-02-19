@@ -1,17 +1,25 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from .models import Author, Book, Member, Loan
-from .serializers import AuthorSerializer, BookSerializer, MemberSerializer, LoanSerializer
+from .serializers import AuthorSerializer, BookSerializer, MemberSerializer, LoanSerializer, ExtendDueDateSerializer, TopActiveMemberSerializer
 from rest_framework.decorators import action
 from django.utils import timezone
 from .tasks import send_loan_notification
+from django.db.models import Count, Q
+from rest_framework.pagination import PageNumberPagination
+
 
 class AuthorViewSet(viewsets.ModelViewSet):
     queryset = Author.objects.all()
     serializer_class = AuthorSerializer
 
+class BookPagination(PageNumberPagination):
+    page_size = 10
+    max_page_size = 100
+
 class BookViewSet(viewsets.ModelViewSet):
-    queryset = Book.objects.all()
+    pagination_class = BookPagination
+    queryset = Book.objects.select_related('author').all()
     serializer_class = BookSerializer
 
     @action(detail=True, methods=['post'])
@@ -46,9 +54,28 @@ class BookViewSet(viewsets.ModelViewSet):
         return Response({'status': 'Book returned successfully.'}, status=status.HTTP_200_OK)
 
 class MemberViewSet(viewsets.ModelViewSet):
-    queryset = Member.objects.all()
+    queryset = Member.objects.select_related('user').all()
     serializer_class = MemberSerializer
 
+    @action(detail=False, methods=['get'], url_path='top-active')
+    def top_active_members(self, request):
+        members = Member.objects.annotate(
+            active_loans=Count('loans', filter=Q(loans__is_returned=False))
+        ).order_by('-active_loans')[:5]
+        serializer = TopActiveMemberSerializer(members, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 class LoanViewSet(viewsets.ModelViewSet):
-    queryset = Loan.objects.all()
+    queryset = Loan.objects.select_related('book__author', 'member__user').all()
     serializer_class = LoanSerializer
+
+    @action(detail=True, methods=['post'])
+    def extend_due_date(self, request, pk=None):
+        loan = self.get_object()
+        serializer = ExtendDueDateSerializer(loan, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        loan.refresh_from_db()
+        return Response(LoanSerializer(loan).data, status=status.HTTP_200_OK)
+
+
